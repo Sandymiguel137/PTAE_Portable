@@ -1,0 +1,5 @@
+# Core runtime and retraining dependencies, constrained to the tested versions.
+-c constraints-tested.txt
+numpy>=1.26,<3
+scipy>=1.11,<2
+torch>=2.6,<3

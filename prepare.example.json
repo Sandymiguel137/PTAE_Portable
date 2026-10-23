@@ -1,0 +1,31 @@
+{
+  "voltage_dir": "../PTAE_DOE_assets/data/voltages",
+  "output_dir": "../PTAE_DOE_assets/prepared/custom",
+  "node_order_path": "../PTAE_DOE_assets/data/voltages/ynodeorder.json",
+  "system_dir": "../PTAE_DOE_assets/data/system",
+  "voltage_layout": "time_nodes",
+  "voltage_unit": "pu",
+  "measurement_mode": "fixed",
+  "group_file": "../PTAE_DOE_assets/data/groups.json",
+  "seed": 42,
+  "sensor_pool": "bundled",
+  "sensor_percentage": 100,
+  "noise_std_fraction": [
+    0,
+    0.01,
+    0.01
+  ],
+  "noise_absolute_std": [
+    0.001,
+    0,
+    0
+  ],
+  "fdi_trajectory_probability": 0.8,
+  "fdi_sensor_percentage": 10,
+  "fdi_kind": "bias",
+  "fdi_channels": [
+    "Vm",
+    "P",
+    "Q"
+  ]
+}

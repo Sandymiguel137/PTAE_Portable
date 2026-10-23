@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+# Private datasets and locally generated artifacts must stay out of Git.
+/data/
+/datasets/
+/prepared/
+/runs/
+/outputs/
+/models/
+/assets/
+*.npy
+*.npz
+*.pth
+*.pt
+*.log
+*.tmp
