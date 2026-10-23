@@ -1,142 +1,204 @@
-# PTAE: portable model evaluation
+# Physics Transformer Autoencoder (PTAE)
 
-Code-only evaluation repository for a trained **physics transformer autoencoder (PTAE)** that estimates clean, all-node complex voltages from noisy sensor measurements with optional false data injection (FDI). The repository is prepared for technical evaluation and sharing with the U.S. Department of Energy (DOE).
+**PTAE_Portable** estimates the physical voltage state of a distribution feeder from noisy sensor measurements that may also contain false data injection (FDI). The pretrained model receives voltage magnitude and active/reactive power at **1,173 sensor locations** and predicts **complex voltage at all 3,913 bus-phase nodes**.
 
-**Start with the separately supplied model. Training is optional.** Download the model bundle separately and place it outside this repository. The code repository contains no trained weights, normalization arrays, feeder arrays, datasets, or generated results. Historical results for the 393-trajectory experiment are documented below.
+The reference state is clean of added measurement noise and FDI. Real physical oscillation and imbalance disturbances remain in that state. PTAE estimates the state that actually occurred; it does not reverse physical disturbances or classify attacks. The pretrained model is tied to its original feeder, sensor installation, and measurement conventions.
 
 ## Quick start
 
-Place the separately downloaded model bundle at `../PTAE_DOE_assets/model/` (a sibling of the repository), or supply its actual external path with `--model-dir`. This folder must contain `bundle.json`, `best_model.pth`, `normalization.npz`, `sensor_order.json`, and `system/`.
+1. Obtain the source archive or repository URL from its owner. Extract/clone the code into a folder named `PTAE_Portable`. No public source URL is assumed in these instructions.
+2. Obtain the **pretrained deployment bundle separately**. No public model or dataset download link is configured. Extract the bundle so that `bundle.json` is directly inside `PTAE_Portable_assets/model/`.
+3. Arrange the workspace as below. All model/data/output paths must be outside the code repository; names shown under assets other than `model/` describe separately supplied or locally generated files.
 
-Python **3.11** is recommended. From the repository root on Linux or macOS:
-
-```bash
-python3.11 -m venv ../ptae-venv
-source ../ptae-venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -r requirements.txt
-python run.py verify --model-dir ../PTAE_DOE_assets/model
+```text
+workspace/
+├── PTAE_Portable/              Code repository
+│   ├── run.py
+│   └── ...
+├── PTAE_Portable_assets/       Distributed separately from the code
+│   ├── model/
+│   │   ├── bundle.json
+│   │   ├── best_model.pth
+│   │   ├── normalization.npz
+│   │   ├── sensor_order.json
+│   │   └── system/
+│   ├── data/
+│   ├── prepared/
+│   ├── outputs/
+│   └── runs/
+└── ptae-venv/                  Local Python environment
 ```
 
-On Windows, create the environment with `py -3.11 -m venv ..\ptae-venv` and activate it with `..\ptae-venv\Scripts\Activate.ps1`. The remaining Python commands are the same. For CUDA, install the PyTorch build appropriate for the local driver instead of the CPU wheel. CPU is the default; `--device cuda` explicitly requests a GPU.
+4. From `workspace/`, install the tested Linux CPU environment:
 
-`verify` checks every model asset checksum, original core source hashes, architecture, normalization, and sensor/node ordering, then loads the checkpoint. Expected dimensions are **3,913 bus-phase nodes**, **1,173 sensor locations**, and **epoch 49**. No dataset is required for this check. `python run.py --help` lists all commands. Package installation is not required. The runner prevents model/data/output paths inside the repository.
+```bash
+cd PTAE_Portable
+python3.11 -m venv ../ptae-venv
+source ../ptae-venv/bin/activate
+python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements.txt
+```
 
-Run the software tests without a private dataset:
+5. Verify the separately supplied model:
+
+```bash
+python run.py verify --model-dir ../PTAE_Portable_assets/model
+```
+
+6. Run automated software tests; these need **code and dependencies only**:
 
 ```bash
 python -B -m unittest discover -s tests -v
 ```
 
-Tests generate small numerical fixtures in temporary directories. They check physics, split exclusions, training/resumption, calibration, export, inference parity, relocation, input validation, and artifact integrity. Synthetic fixture accuracy is not a scientific performance result.
+7. Obtain compatible measurement arrays separately and follow [Running predictions](#running-predictions). Prediction examples require those files; they do not generate evaluation data.
 
-See [VALIDATION.md](VALIDATION.md) for the executed clean-install checks and full 40-trajectory test rerun against the historical results.
+`python run.py --help` works with code alone, even before numerical dependencies are installed. Run the remaining examples from the repository root with the environment activated, unless otherwise stated.
 
-## Test the trained model on supplied measurements
+## Requirements
 
-Supply measurement arrays and a JSON list describing their **actual sensor order**. Paths below are examples to replace with the separately supplied evaluation data:
-
-```bash
-python run.py predict \
-  --model-dir ../PTAE_DOE_assets/model \
-  --measurements ../PTAE_DOE_assets/data/evaluation/measurements.npy \
-  --sensor-order ../PTAE_DOE_assets/data/evaluation/sensor_order.json \
-  --output ../PTAE_DOE_assets/outputs/evaluation
-```
-
-To score against clean voltage truth, add the reference arrays and their node order:
-
-```bash
-python run.py predict \
-  --model-dir ../PTAE_DOE_assets/model \
-  --measurements ../PTAE_DOE_assets/data/evaluation/measurements.npy \
-  --sensor-order ../PTAE_DOE_assets/data/evaluation/sensor_order.json \
-  --availability ../PTAE_DOE_assets/data/evaluation/availability.npy \
-  --truth ../PTAE_DOE_assets/data/evaluation/truth.npy \
-  --truth-node-order ../PTAE_DOE_assets/data/evaluation/node_order.json \
-  --output ../PTAE_DOE_assets/outputs/scored_evaluation
-```
-
-| Input | Contract |
+| Component | Requirement / validation status |
 | --- | --- |
-| Measurements | `.npy`, real floating point, shape `(T, 1173, 3)`, `T > 0`; channels **`[Vm, P, Q]`**, all in per unit. |
-| Sensor order | JSON list of 1,173 bus-phase names in the measurement sensor-axis order. Must exactly match `../PTAE_DOE_assets/model/sensor_order.json`. Reorder measurements and availability together when needed. |
-| Availability, optional | `.npy`, shape `(T, 1173)`, binary `0/1`, shared by all three channels at that sensor. Omitted means every sensor is available. Missing measurements require finite placeholders and availability `0`. |
-| Clean truth, optional | `.npy`, complex64 or complex128, shape `(T, 3913)`, complex voltage in per unit. Used only for scoring after prediction. |
-| Truth node order | Required with truth; JSON list matching `../PTAE_DOE_assets/model/system/ynodeorder.json` exactly. |
-| Scoring timestamps, optional | `--sample-indices FILE.npy`: a nonempty, strictly increasing 1-D integer array of original zero-based timestamps. Requires truth; limits metrics to those timestamps. Predictions still cover every input timestamp. |
+| Python | 3.11 or later is required by the code. **3.11.11 tested locally**; Python 3.12 is configured in CI but has not been executed locally. Other versions are unvalidated. |
+| NumPy | Tested pin: **2.3.5**; declared range `>=1.26,<3`. |
+| SciPy | Tested pin: **1.16.3**; declared range `>=1.11,<2`. |
+| PyTorch | Tested pin: **2.10.0**, with CPU-only and CUDA 12.8 builds; declared range `>=2.6,<3`. |
+| Execution | CPU is the default. CUDA is optional. The CLI supports `cpu`, `cuda`, and `auto`. |
+| Platforms | Local execution validated on Linux. macOS and Windows commands are provided, but those platforms have not been run here. MPS/ROCm execution has not been validated. |
 
-The model requires the **same feeder, node identities, reference-angle convention, sensor installation, and measurement definition** used for training. Matching dimensions alone is insufficient. The order files declare the supplied arrays' order; the program cannot infer their physical semantics from their values. Do not copy the model's order list onto differently ordered data.
+`requirements.txt` applies `constraints-tested.txt`, so the documented installation uses the tested numerical versions. Broader declared ranges are not a claim that every combination has been tested. Jupyter, pandas, plotting packages, and OpenDSS are not required for inference or retraining on prepared arrays.
 
-`Vm` is node-to-ground magnitude. `P + jQ = V · conj(Y_network V)` is positive net injection into the passive network, using a **1 MVA** power base. It is not PV-only output or raw inverter telemetry. Convert kW/kvar to per unit by dividing by **1,000**. Voltage angle is estimated as part of the output and is not a measured input. No noise or FDI is regenerated during prediction.
+No minimum RAM, GPU memory, or execution-time guarantee has been established. The checkpoint is about 21 MB; it is only one part of runtime memory use. Dataset storage and calibration scratch space are additional. Reduce `--batch-size` if necessary.
 
-Each output directory must be new. A successful prediction creates:
+## Installation
 
-- `predictions.npy`: complex128 voltage estimates `(T, 3913)` in per unit; magnitude is `abs(V)`, angle is `numpy.angle(V)`.
-- `node_order.json`: ordered output node names.
-- `report.json`: optional metrics, input/checkpoint checksums, dimensions, and runtime versions/settings.
+The Linux CPU commands in [Quick start](#quick-start) create the external `ptae-venv` and install the pinned dependencies. Do not install the repository as a Python package; use `run.py` directly.
 
-Inference is batched; `--batch-size 16 --threads 4` are the defaults. No target, attack label, physical-event schedule, or future observation is provided to the estimator.
+**macOS:** use the same environment/activation commands, then install from PyPI:
 
-## Re-evaluate the original held-out test partition
+```bash
+python -m pip install -r requirements.txt
+```
 
-Obtain the original prepared dataset separately, then run:
+**Windows PowerShell**, starting in `workspace/`:
+
+```powershell
+cd PTAE_Portable
+py -3.11 -m venv ..\ptae-venv
+& ..\ptae-venv\Scripts\Activate.ps1
+python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements.txt
+python run.py verify --model-dir ..\PTAE_Portable_assets\model
+python -B -m unittest discover -s tests -v
+```
+
+If local PowerShell policy prevents activation, invoke `..\ptae-venv\Scripts\python.exe` directly in place of `python`.
+
+**Optional CUDA (Linux/Windows):** in a separate environment with a driver compatible with CUDA 12.8, install the matching build before the remaining requirements:
+
+```bash
+python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -r requirements.txt
+```
+
+Choose builds for **2.10.0** using the [official PyTorch version-specific installation instructions](https://pytorch.org/get-started/previous-versions/#v2100). Only `torch` is needed here. Add `--device cuda` to an inference/evaluation command to explicitly use the GPU. `--device auto` selects CUDA when available and CPU otherwise; it does not select MPS. Numerical results can differ across devices or library builds.
+
+## Model verification
+
+```bash
+python run.py verify --model-dir ../PTAE_Portable_assets/model
+```
+
+Verification checks required bundle metadata, SHA-256 fingerprints of every model asset, core-source compatibility, exact architecture, sensor/node maps, normalization shapes/scales, and checkpoint identity. It loads the state dictionary strictly. Success prints JSON containing `"verified": true`, `"best_epoch": 49`, `"nodes": 3913`, `"sensors": 1173`, the execution device, and checkpoint SHA-256.
+
+Verification confirms bundle integrity and compatibility. It does not run a scientific accuracy evaluation or prove that arbitrary measurements match the feeder. A missing `bundle.json` usually indicates the wrong extraction level; checksum or core-source errors indicate changed/incompatible files. See [Troubleshooting](#troubleshooting).
+
+## Running predictions
+
+The following example requires externally supplied measurement files at the shown paths:
+
+```bash
+python run.py predict \
+  --model-dir ../PTAE_Portable_assets/model \
+  --measurements ../PTAE_Portable_assets/data/evaluation/measurements.npy \
+  --sensor-order ../PTAE_Portable_assets/data/evaluation/sensor_order.json \
+  --output ../PTAE_Portable_assets/outputs/evaluation
+```
+
+PowerShell uses a backtick for line continuation, not a backslash. A complete single-line equivalent is:
+
+```powershell
+python run.py predict --model-dir ..\PTAE_Portable_assets\model --measurements ..\PTAE_Portable_assets\data\evaluation\measurements.npy --sensor-order ..\PTAE_Portable_assets\data\evaluation\sensor_order.json --output ..\PTAE_Portable_assets\outputs\evaluation
+```
+
+| Input | Data contract |
+| --- | --- |
+| `--measurements` | `.npy`, real floating point, shape **`(T, 1173, 3)`**, `T > 0`, finite values. Channels: **`[Vm, P, Q]`**, all per unit. |
+| `--sensor-order` | JSON list of 1,173 bus-phase names describing the actual measurement sensor axis. Must exactly match the deployment bundle's `sensor_order.json`. |
+| `--availability`, optional | `.npy`, binary `0/1`, shape `(T, 1173)`. One mask value covers all three channels at that sensor. Omitted means all sensors available. Use finite placeholders with mask `0` for missing readings; NaN/Inf are rejected. |
+| `--truth`, optional | `.npy`, clean complex voltage, shape **`(T, 3913)`**, normally complex64/complex128, in per unit. Used only for scoring after prediction. |
+| `--truth-node-order` | Required with truth; JSON list matching `model/system/ynodeorder.json` exactly. |
+| `--sample-indices`, optional | Nonempty, strictly increasing 1-D integer `.npy` timestamps in `[0,T)`. Requires truth; limits scoring to selected original timestamps. Saved predictions still cover all `T` inputs. |
+
+Reorder measurement and availability arrays together before prediction when necessary. Order files must describe the actual arrays; copying the model's names onto differently ordered values does not make them compatible. Matching array dimensions alone is insufficient. The same feeder topology, node identities, sensor installation, voltage bases, phase-angle reference, and physical measurement definition are required. A new feeder requires a matching system and a newly trained model.
+
+`Vm` is node-to-ground voltage magnitude. Active/reactive power uses positive net injection into the passive network:
+
+```text
+I = Y_network V
+P + jQ = V · conj(I)
+```
+
+Power uses a **1 MVA** base: convert kW/kvar to per unit by dividing by **1,000**. These are net network injections, not PV-only outputs or arbitrary inverter telemetry. Input voltage angles are not measured. Prediction does not regenerate noise or FDI and does not use truth, attack labels, event schedules, or future samples as model inputs.
+
+For scoring with clean truth and an availability mask, use a fresh output directory:
+
+```bash
+python run.py predict \
+  --model-dir ../PTAE_Portable_assets/model \
+  --measurements ../PTAE_Portable_assets/data/evaluation/measurements.npy \
+  --sensor-order ../PTAE_Portable_assets/data/evaluation/sensor_order.json \
+  --availability ../PTAE_Portable_assets/data/evaluation/availability.npy \
+  --truth ../PTAE_Portable_assets/data/evaluation/truth.npy \
+  --truth-node-order ../PTAE_Portable_assets/data/evaluation/node_order.json \
+  --output ../PTAE_Portable_assets/outputs/scored_evaluation
+```
+
+A successful prediction writes:
+
+- `predictions.npy`: complex128 array `(T, 3913)` in per unit. Use `numpy.abs(V)` for magnitude and `numpy.angle(V)` for angle in radians.
+- `node_order.json`: ordered output bus-phase names.
+- `report.json`: optional reference metrics, snapshot counts, input/checkpoint hashes, and runtime versions/settings.
+
+Output directories must be new and outside the repository/model bundle. Defaults are `--device cpu --batch-size 16 --threads 4`. Validation errors exit with status **2**; success exits with **0**.
+
+## Reproducing evaluation
+
+| Activity | Required inputs | Meaning |
+| --- | --- | --- |
+| Automated tests | Code and Python dependencies | Software/physics checks on temporary synthetic fixtures; not scientific accuracy claims. |
+| `verify` | External deployment bundle | Integrity and compatibility of the trained model. |
+| `predict` | Bundle and compatible measurement arrays | Voltage estimation; optional truth enables reference scoring. |
+| `test` | Bundle and original prepared test data | Scientific evaluation using frozen held-out trajectories/timestamps. |
+| Optional retraining | Prepared training/validation/calibration/test data | New fitting and validation-based checkpoint selection; see RETRAINING.md. |
+
+Obtain the original prepared data separately. This command evaluates only the original **40 held-out test trajectories**:
 
 ```bash
 python run.py test \
-  --model-dir ../PTAE_DOE_assets/model \
-  --prepared-dir ../PTAE_DOE_assets/prepared/mixed_injection_393 \
+  --model-dir ../PTAE_Portable_assets/model \
+  --prepared-dir ../PTAE_Portable_assets/prepared/mixed_injection_393 \
   --conditions clean noisy fdi \
-  --output ../PTAE_DOE_assets/outputs/mixed393_test
+  --output ../PTAE_Portable_assets/outputs/mixed393_test
 ```
 
-This command uses only the frozen **40 test trajectories** and their eligible timestamps. It checks the original prepared manifest identity and checksums of every array used for scoring, then computes metrics independently for the three input conditions. It does not fit normalization, train weights, select a checkpoint, or recalibrate. Its default output is a JSON report; add `--save-predictions` for full traces. Saving predictions changes batching around excluded timestamps, so very small floating point differences are possible.
+The frozen manifest must match the checkpoint's dataset identity. All arrays used for scoring are checksum-verified. Retain `manifest.json`, `normalization.npz`, `system/ynodeorder.json`, `system/sensor_indices_0based.npy`, `system/ybus_pu.npz`, and the `truth/`, `availability/`, `sample_indices/`, and requested condition arrays for every test trajectory. The complete original preparation also works. Train/validation/calibration trajectories are not read by this command.
 
-The prepared dataset must retain `manifest.json`, `normalization.npz`, `system/ynodeorder.json`, `system/sensor_indices_0based.npy`, `system/ybus_pu.npz`, and the `truth/`, `availability/`, `sample_indices/`, and requested measurement-condition arrays for every test trajectory. The full original preparation also works. A new or modified dataset should use `predict` with an explicit input contract instead.
+`test` does not retrain, refit normalization, or calibrate. It writes `report.json` with overall/per-trajectory voltage metrics and `node_order.json`. Add `--save-predictions` to also write full `(T,N)` arrays under condition subdirectories. Metrics use eligible timestamps only. Saving full predictions changes batching around exclusions and can cause small floating point differences.
 
-Historical calibration coverage and event/family breakdowns are described as applicable below; the standalone `test` command reports voltage accuracy overall and per trajectory. Optional training-stage evaluation provides the original calibrated and event/family breakdowns.
+Event/family breakdowns and calibrated coverage belong to the original training-stage evaluator, not this standalone `test` report. A rebuilt or modified dataset has a different identity; use `predict` with explicit ordering for new inputs, or train/export a new run for that preparation.
 
-## Pipeline and model
-
-```mermaid
-flowchart LR
-  A[Physical feeder simulation with cyberphysical attacks] --> B[Clean complex voltage truth]
-  B --> C[Clean Vm / P / Q from matching network Y]
-  C --> D[Gaussian measurement noise]
-  D --> E[Measurement FDI]
-  E --> F[Frozen training normalization and PTAE]
-  F --> G[Estimated clean all-node complex voltage]
-  B --> H[Supervision during training / reference during scoring]
-  G --> H
-```
-
-**Clean means free of added measurement corruption.** Physical oscillation and imbalance attacks change the feeder state and remain in the clean voltage target. The estimator removes the effect of measurement noise/FDI while reconstructing the physical state that actually occurred. It is a state estimator, not a model that reverses physical attacks or classifies attacks.
-
-The original model and loss are preserved byte for byte in `dependencies/model.py`. The training runtime is unchanged numerically; its provenance checks explicitly recognize the known folder-layout migration and still enforce dataset, numerical-setting, and remaining core-source identities. The model is a spatial, per-snapshot transformer autoencoder with graph propagation, learned node embeddings, 48 compressed attention tokens, four transformer layers, width 128, and four attention heads. It has **5,362,327 trainable parameters** and no temporal memory. The supervised output is normalized real/imaginary voltage at every node. Training also reconstructs clean measurements and applies a differentiable AC measurement loss. Loss weights are `1` for voltage-state MSE, `0.05` for measurement reconstruction, and `0.001` for the log-squared AC residual term. Training randomly masks 10% of sensor locations; inference uses the supplied availability mask.
-
-The AC map uses the passive-network admittance assembled from the native simulation's PDE element matrices, excluding PC Norton equivalents. A static graph derived from that network supplies the model's physical coupling structure. The learned measurement-reconstruction head supports training; the public prediction output is complex voltage.
-
-## The 393-trajectory experiment
-
-The source batch planned 400 trajectories. **393 validated, completed trajectories were accepted; seven failed/incomplete trajectories were excluded.** Each accepted trajectory has 1,200 snapshots at 1 Hz. Physical scenarios include oscillation, imbalance, guaranteed overlap, and mixed attacks. Clean, noisy, and FDI variants of a trajectory stay in the same partition.
-
-Partitions were frozen before fitting statistics or generating measurement corruptions, stratified by physical category. All-node complex states were rounded to 10 decimal places and hashed; each state was retained once, processing train → validation → calibration → test. Repeated timestamps remain in stored traces but are excluded from fitting/scoring through `sample_indices/*.npy`.
-
-| Partition | Trajectories | Eligible snapshots | Role |
-| --- | ---: | ---: | --- |
-| Train | 275 | 259,055 | Fit normalization/noise scales and weights |
-| Validation | 39 | 36,683 | Select checkpoint |
-| Calibration | 39 | 36,523 | Fit empirical per-node error radii |
-| Test | 40 | 37,195 | Final evaluation |
-
-Gaussian noise is independent across time, sensors, and channels: `Vm σ = 0.001 pu`; P/Q σ is 1% of each sensor/channel's eligible-training RMS, floored at `1e-7 pu`. Measurement FDI starts from the exact same noisy realization. The approximate trajectory allocation per partition is 20% no FDI, 30% bias, 30% ramp, 10% delayed packets, 5% fake oscillation, and 5% fake imbalance, rounded to integer counts.
-
-Each attacked trajectory has one 120–240 second episode on approximately 5–10% of sensors. Bias/ramp/fake-oscillation Vm peaks are 0.001–0.003 pu; P/Q peaks are 1–3% of training RMS with a floor. Delay replays packets from 1–5 seconds earlier, including their original noise. Fake oscillation periods are 12–40 seconds. Fake imbalance changes Vm with opposite offsets on verified primary A/B phases; conductor suffixes are not treated as phase labels. FDI timing is separate from physical attack schedules. Targets never receive added measurement noise or FDI.
-
-Training used FDI inputs, seed 42, batch size 16, AdamW with learning rate `1e-4` and weight decay `1e-5`, gradient clipping at `1.0`, a validation-loss plateau scheduler, up to 50 epochs, and early-stop patience 10. All 50 epochs completed. Validation selected **epoch 49**, with normalized real/imaginary state MSE **0.0009586120**. That normalized validation loss is distinct from the physical-unit test errors below.
-
-## Recorded test results
+## Results
 
 Recorded on **2026-10-20**, using the same FDI-trained epoch-49 checkpoint for every condition. Each row pools **145,544,035 node-time values** from 37,195 eligible snapshots across 40 held-out trajectories. These are historical experiment results, transcribed from the original evaluation records; the repository does not bundle those records or the evaluation arrays.
 
@@ -163,35 +225,68 @@ The original 95th-percentile calibration yielded pooled test node-time coverage 
 
 **Evaluation scope:** all trajectories share the same feeder and load/solar operating window. The test covers held-out physical attack schedules and measurement corruption realizations within that window. Duplicate-state exclusion does not establish statistical independence or generalization to unseen dates, feeders, topologies, or operating conditions. The injected FDI is not claimed to be stealthy or AC-consistent. Exact cross-device or cross-PyTorch bitwise equality is not promised.
 
-## Optional retraining
+## Model and scientific methodology
 
-See [RETRAINING.md](RETRAINING.md) for exact mixed-393 preparation, generic external-voltage preparation, training, calibration, testing, and model export. The simulation engine and private simulation inputs are external prerequisites for regenerating physical trajectories; inference and retraining on prepared arrays do not require OpenDSS or the original workstation.
+```mermaid
+flowchart LR
+  A[Physical simulation with disturbances] --> B[Clean complex voltage truth]
+  B --> C[Clean Vm, P, Q from matching Y]
+  C --> D[Gaussian measurement noise]
+  D --> E[Measurement FDI]
+  E --> F[Frozen normalization and PTAE]
+  F --> G[Estimated all-node complex voltage]
+  B --> H[Training supervision or evaluation reference]
+  G --> H
+```
 
-## Repository contents and provenance
+PTAE is a spatial, per-snapshot transformer autoencoder with graph propagation, learned node embeddings, **48 attention tokens**, **four transformer layers**, width **128**, four attention heads, and **5,362,327 trainable parameters**. It has no temporal memory. The output is learned in normalized real/imaginary coordinates and decoded with frozen training statistics.
+
+Training combines normalized voltage-state MSE (weight `1`), clean-measurement reconstruction (weight `0.05`), and a differentiable AC reconstruction penalty (weight `0.001`). Ten percent of sensor locations are randomly masked during fitting. The AC map uses the passive network assembled from native simulation PDE element matrices, excluding PC Norton equivalents. Inference uses the supplied availability mask.
+
+The model architecture, forward computations, physics, normalization, losses, and original weights are preserved. Legacy checkpoint source identities are retained internally for compatibility; they are not public project names. The known earlier folder migration remains explicit in the compatibility mechanism. Detailed splits, corruptions, training settings, and preparation prerequisites are in [RETRAINING.md](RETRAINING.md).
+
+## Repository structure
 
 ```text
-PTAE_DOE/
-  run.py                 Main runner: verify, predict, test, prepare, train, export
-  dependencies/          Model, physics, training, preparation, and inference helpers
-  tests/                 Software checks using temporary fixtures
-  .github/               Automated test workflow
-  README.md              Setup, input contract, pipeline, and 393-run results
-  RETRAINING.md           Optional retraining instructions
-  VALIDATION.md           Executed validation and reproduction limits
-  prepare.example.json   Editable configuration example; no data
-  requirements.txt       Python dependencies
-  constraints-tested.txt Tested numerical-library versions
-
-PTAE_DOE_assets/          Separate sibling directory; upload/distribute separately
-  model/                 Checkpoint, normalization, feeder/order assets, hashes
-  data/                  Evaluation arrays, when supplied separately
-  prepared/              Prepared datasets, when supplied separately
-  outputs/               Generated prediction/test outputs
-  runs/                  Optional retraining outputs
+PTAE_Portable/
+├── README.md
+├── RETRAINING.md
+├── VALIDATION.md
+├── requirements.txt
+├── constraints-tested.txt
+├── prepare.example.json
+├── run.py
+├── dependencies/             Model, physics, preparation, training, inference
+├── tests/                    Synthetic software checks
+└── .github/workflows/        Automated CPU test workflow
 ```
+
+Only `run.py`, `dependencies/`, and the numerical dependencies are required to run inference. Keep `tests/` for validation and `.github/` for hosted automation. Model bundles, datasets, virtual environments, logs, and generated outputs stay outside the source repository. `.gitignore` excludes common artifacts; the runner rejects model/data/output paths inside the repository. Relative paths resolve against the current working directory. Absolute paths and paths containing spaces are supported.
+
+No `LICENSE` is present: the repository owner must choose and authorize a license before an open-source release. This repository does not grant additional license permissions by implication.
+
+## Troubleshooting
+
+| Symptom | Likely cause / action |
+| --- | --- |
+| Missing `bundle.json` or `best_model.pth` | Obtain the external model and check the extraction level / `--model-dir`. |
+| Missing Python dependency | Activate `ptae-venv`; run `python -m pip install -r requirements.txt` from the repository root. |
+| Sensor or truth-node order differs | Supply the actual ordered name lists and explicitly reorder arrays to match the trained installation. |
+| Shape/dtype/NaN/Inf error | Check the input contract above. Magnitude-only truth and complex measurement channels are invalid. |
+| File not found / path rejected | Resolve paths from the current working directory. Keep model/data/output paths outside the repo; quote paths containing spaces. |
+| Model/test checksum mismatch | A required file changed or belongs to another bundle/preparation. Restore the trusted original; do not edit fingerprints to bypass verification. |
+| Core-source identity differs | Use the matching code/checkpoint combination. Preserve the compatibility checks. |
+| Output already exists | Choose a fresh directory. Prediction/test/export outputs are not overwritten. Training resumes only a matching saved run. |
+| CUDA requested but unavailable | Use `--device cpu`, or install a compatible pinned CUDA build and verify the driver/environment. |
+| GPU memory error | Reduce `--batch-size`; CPU execution is also available. |
+
+Malformed configuration/bundle files and invalid numerical inputs should fail with exit status `2`. A failed preparation can leave incomplete external artifacts; without a completed manifest they are not valid training inputs. Use a fresh output directory after inspecting a failed preparation.
+
+## Additional documentation
+
+- [RETRAINING.md](RETRAINING.md): generic and mixed-393 preparation, training, calibration, export, and the historical experiment recipe.
+- [VALIDATION.md](VALIDATION.md): executed checks, exact test counts, compatibility evidence, and unverified limitations.
 
 Model SHA-256: `a060e07d99ffc072c41174412a6b182ef92a82cfcb2b493e5629bb3506c9449b`.
 
 Original prepared-manifest SHA-256: `0ea13d78b62ea7fc6dd64d38db3b3553e7ccb2ace8ba18ad5fd3afb4b0d5845f`.
-
-`../PTAE_DOE_assets/model/bundle.json` records exact asset/core-code hashes, architecture, and original numerical settings without workstation paths. The separately distributed checkpoint is about 21 MB. The repository has exactly three top-level support directories: `dependencies/`, `tests/`, and `.github/` (plus Git’s internal `.git/` metadata). Model assets, datasets, virtual environments, and generated artifacts belong outside the repository. The original research directory is independent of this code-only repository.

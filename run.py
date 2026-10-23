@@ -6,14 +6,6 @@ import sys
 
 sys.dont_write_bytecode = True
 
-from dependencies.common import read_json
-from dependencies.experiment import TrainingConfig, train, calibrate, evaluate
-from dependencies.prepare import PreparationConfig, prepare_dataset
-from dependencies.deployment import Deployment, export_bundle, external_path
-from dependencies.inference import predict_files, test_prepared
-from dependencies.mixed_preparation import prepare as prepare_mixed
-
-
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
@@ -68,6 +60,16 @@ def main(argv=None):
     command_parser = parser()
     args = command_parser.parse_args(argv)
     try:
+        if sys.version_info < (3, 11):
+            raise ValueError("Python 3.11 or later is required")
+        # Help and argument parsing work before numerical dependencies are installed.
+        from dependencies.common import read_json
+        from dependencies.experiment import TrainingConfig, train, calibrate, evaluate
+        from dependencies.prepare import PreparationConfig, prepare_dataset
+        from dependencies.deployment import Deployment, export_bundle, external_path
+        from dependencies.inference import predict_files, test_prepared
+        from dependencies.mixed_preparation import prepare as prepare_mixed
+
         for name in ('model_dir', 'prepared_dir', 'run_dir', 'source', 'source_batch',
                      'phase_mapping', 'output', 'measurements', 'sensor_order', 'availability',
                      'truth', 'truth_node_order', 'sample_indices'):
@@ -112,7 +114,7 @@ def main(argv=None):
                 saved = read_json(run / "training_config.json")
                 settings = {**saved, "device": args.device, "threads": args.threads}
                 settings.pop("prepared_dir"); settings.pop("run_dir")
-                print("Resuming with the saved numerical settings; dataset identity is verified.", flush=True)
+                print("Resuming with the saved numerical settings; dataset/checkpoint identities will be checked before execution.", flush=True)
             config = TrainingConfig(str(prepared), str(run), **settings)
             report = {}
             if args.stage in ("train", "all"):
@@ -122,7 +124,15 @@ def main(argv=None):
             if args.stage in ("test", "all"):
                 report["test"] = evaluate(config, save_predictions=args.save_predictions)
         print(json.dumps(report, indent=2, allow_nan=False))
-    except (ValueError, OSError, KeyError, TypeError, RuntimeError) as exc:
+    except ModuleNotFoundError as exc:
+        command_parser.exit(2, f"ptae: Missing Python dependency '{exc.name}'. Activate ptae-venv and run "
+                            "'python -m pip install -r requirements.txt'.\n")
+    except ImportError as exc:
+        command_parser.exit(2, f"ptae: Could not import a numerical dependency: {exc}. "
+                            "Check the activated environment and requirements.txt.\n")
+    except KeyError as exc:
+        command_parser.exit(2, f"ptae: Missing required configuration or metadata field: {exc}\n")
+    except (ValueError, OSError, TypeError, RuntimeError, EOFError, FloatingPointError, OverflowError) as exc:
         command_parser.exit(2, f"ptae: {exc}\n")
 
 

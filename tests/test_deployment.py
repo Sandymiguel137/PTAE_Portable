@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -207,6 +208,114 @@ class DeploymentTests(unittest.TestCase):
                                      '--run-dir', str(blocked)], cwd=repo, capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
             self.assertEqual((blocked/'private.txt').read_text(), 'keep')
+
+    def test_help_and_dependency_errors_without_site_packages(self):
+        runner = Path(__file__).resolve().parents[1]/'run.py'
+        help_result = subprocess.run([sys.executable, '-S', str(runner), '--help'],
+                                     cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn('prepare-mixed', help_result.stdout)
+        missing = subprocess.run([sys.executable, '-S', str(runner), 'verify', '--model-dir', str(self.bundle_dir)],
+                                 cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn('Missing Python dependency', missing.stderr)
+        self.assertIn('requirements.txt', missing.stderr)
+        self.assertNotIn('Traceback', missing.stderr)
+
+    def test_malformed_bundle_metadata_has_clear_errors(self):
+        runner = Path(__file__).resolve().parents[1]/'run.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for value, expected in (([], 'JSON object'), ({}, 'Missing bundle metadata')):
+                write_json(root/'bundle.json', value)
+                result = subprocess.run([sys.executable, str(runner), 'verify', '--model-dir', str(root)],
+                                        cwd=root, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(expected, result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+
+    def test_truncated_inputs_and_failed_inference_do_not_publish_output(self):
+        runner = Path(__file__).resolve().parents[1]/'run.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            broken = root/'truncated.npy'; broken.write_bytes(b'')
+            output = root/'broken output'
+            result = subprocess.run([sys.executable, str(runner), 'predict', '--model-dir', str(self.bundle_dir),
+                                     '--measurements', str(broken), '--sensor-order', str(self.bundle_dir/'sensor_order.json'),
+                                     '--output', str(output)], cwd=root, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertNotIn('Traceback', result.stderr)
+            self.assertFalse(output.exists())
+            raw = root/'raw.npy'; np.save(raw, self.raw)
+            before = raw.read_bytes()
+            with patch('dependencies.inference.predict', side_effect=FloatingPointError('Nonfinite voltage prediction')):
+                with self.assertRaisesRegex(FloatingPointError, 'Nonfinite'):
+                    predict_files(self.deployment, raw, self.bundle_dir/'sensor_order.json', output)
+            self.assertFalse(output.exists())
+            self.assertEqual(raw.read_bytes(), before)
+
+    def test_test_command_works_from_another_directory_and_rejects_changed_manifest(self):
+        runner = Path(__file__).resolve().parents[1]/'run.py'
+        with tempfile.TemporaryDirectory(prefix='ptae external cwd ') as tmp:
+            root = Path(tmp)
+            command = [sys.executable, str(runner), 'test', '--model-dir', str(self.bundle_dir),
+                       '--prepared-dir', self.cfg.prepared_dir, '--output', str(root/'report'), '--threads', '1']
+            result = subprocess.run(command, cwd=root, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = read_json(root/'report/report.json')
+            self.assertEqual(set(report['conditions']), {'clean', 'noisy', 'fdi'})
+            self.assertTrue((root/'report/node_order.json').exists())
+            self.assertFalse((root/'report/fdi').exists())
+            trace_command = list(command)
+            trace_command[trace_command.index('--output')+1] = str(root/'traces')
+            trace_command.append('--save-predictions')
+            saved = subprocess.run(trace_command, cwd=root, text=True, capture_output=True)
+            self.assertEqual(saved.returncode, 0, saved.stderr)
+            trace_report = read_json(root/'traces/report.json')
+            for condition in ('clean', 'noisy', 'fdi'):
+                for name in self.bundle.splits['test']:
+                    self.assertEqual(np.load(root/'traces'/condition/name).shape,
+                                     self.bundle.array('truth', name).shape)
+                self.assertEqual(trace_report['conditions'][condition]['overall'],
+                                 report['conditions'][condition]['overall'])
+            changed = root/'modified dataset'; changed.mkdir()
+            manifest = read_json(Path(self.cfg.prepared_dir)/'manifest.json'); manifest['complete'] = False
+            write_json(changed/'manifest.json', manifest)
+            command[command.index('--prepared-dir')+1] = str(changed)
+            command[command.index('--output')+1] = str(root/'rejected')
+            result = subprocess.run(command, cwd=root, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('frozen dataset', result.stderr)
+            self.assertFalse((root/'rejected').exists())
+
+    def test_export_rejects_modified_normalization_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            changed = root/'changed prepared'
+            shutil.copytree(self.cfg.prepared_dir, changed)
+            with np.load(changed/'normalization.npz') as saved:
+                values = {key: saved[key] for key in saved.files}
+            values['ami_mean'] = values['ami_mean'] + 1
+            np.savez(changed/'normalization.npz', **values)
+            with self.assertRaisesRegex(ValueError, 'Prepared model asset changed'):
+                export_bundle(changed, self.cfg.run_dir, root/'rejected model')
+            self.assertFalse((root/'rejected model').exists())
+
+    def test_cli_invalid_training_settings_and_config_fail_safely(self):
+        runner = Path(__file__).resolve().parents[1]/'run.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            invalid_run = root/'invalid run'
+            result = subprocess.run([sys.executable, str(runner), 'train', '--prepared-dir', self.cfg.prepared_dir,
+                                     '--run-dir', str(invalid_run), '--epochs', '0'], cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('Invalid training settings', result.stderr)
+            self.assertFalse(invalid_run.exists())
+            config_path = root/'invalid.json'; config_path.write_text('{')
+            result = subprocess.run([sys.executable, str(runner), 'prepare', '--config', str(config_path)],
+                                    cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertNotIn('Traceback', result.stderr)
 
 
 if __name__ == '__main__':

@@ -100,6 +100,19 @@ class Deployment:
         self.root = Path(root).expanduser().resolve()
         self.metadata = read_json(self.root / "bundle.json")
         meta = self.metadata
+        if not isinstance(meta, dict):
+            raise ValueError("bundle.json must contain a JSON object")
+        required = {'format', 'architecture', 'channel_order', 'power_base_va', 'voltage_unit',
+                    'power_unit', 'measurement_mode', 'hashes', 'source_identity', 'training_config',
+                    'nodes', 'sensors', 'best_epoch'}
+        missing = required - meta.keys()
+        if missing:
+            raise ValueError("Missing bundle metadata fields: " + ", ".join(sorted(missing)))
+        for key in ('hashes', 'source_identity', 'training_config'):
+            if not isinstance(meta[key], dict):
+                raise ValueError(f"Bundle {key} must be a JSON object")
+        if not isinstance(meta['source_identity'].get('code_sha256'), dict):
+            raise ValueError("Bundle source_identity requires core code_sha256 fingerprints")
         if meta.get("format") != FORMAT or meta.get("architecture") != SPEC:
             raise ValueError("Unknown deployment format or architecture")
         if (meta.get("channel_order") != ["Vm", "P", "Q"] or meta.get("voltage_unit") != "pu"
@@ -152,6 +165,8 @@ class Deployment:
             raise ValueError("CUDA requested but unavailable; use --device cpu")
         self.runtime = Runtime(cfg, SimpleNamespace(nodes=self.nodes, sensors=self.sensors, y=y, stats=stats, native=False))
         checkpoint = torch.load(self.root / "best_model.pth", map_location="cpu", weights_only=True)
+        if not isinstance(checkpoint, dict):
+            raise ValueError("Checkpoint must contain a state dictionary and training metadata")
         if checkpoint.get("identity") != meta["source_identity"] or checkpoint.get("architecture") != SPEC:
             raise ValueError("Checkpoint identity or architecture differs from bundle metadata")
         if checkpoint.get("epoch") != meta["best_epoch"]:
