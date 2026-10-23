@@ -264,29 +264,3 @@ PTAE_Portable/
 Only `run.py`, `dependencies/`, and the numerical dependencies are required to run inference. Keep `tests/` for validation and `.github/` for hosted automation. Model bundles, datasets, virtual environments, logs, and generated outputs stay outside the source repository. `.gitignore` excludes common artifacts; the runner rejects model/data/output paths inside the repository. Relative paths resolve against the current working directory. Absolute paths and paths containing spaces are supported.
 
 No `LICENSE` is present: the repository owner must choose and authorize a license before an open-source release. This repository does not grant additional license permissions by implication.
-
-## Troubleshooting
-
-| Symptom | Likely cause / action |
-| --- | --- |
-| Missing `bundle.json` or `best_model.pth` | Obtain the external model and check the extraction level / `--model-dir`. |
-| Missing Python dependency | Activate `ptae-venv`; run `python -m pip install -r requirements.txt` from the repository root. |
-| Sensor or truth-node order differs | Supply the actual ordered name lists and explicitly reorder arrays to match the trained installation. |
-| Shape/dtype/NaN/Inf error | Check the input contract above. Magnitude-only truth and complex measurement channels are invalid. |
-| File not found / path rejected | Resolve paths from the current working directory. Keep model/data/output paths outside the repo; quote paths containing spaces. |
-| Model/test checksum mismatch | A required file changed or belongs to another bundle/preparation. Restore the trusted original; do not edit fingerprints to bypass verification. |
-| Core-source identity differs | Use the matching code/checkpoint combination. Preserve the compatibility checks. |
-| Output already exists | Choose a fresh directory. Prediction/test/export outputs are not overwritten. Training resumes only a matching saved run. |
-| CUDA requested but unavailable | Use `--device cpu`, or install a compatible pinned CUDA build and verify the driver/environment. |
-| GPU memory error | Reduce `--batch-size`; CPU execution is also available. |
-
-Malformed configuration/bundle files and invalid numerical inputs should fail with exit status `2`. A failed preparation can leave incomplete external artifacts; without a completed manifest they are not valid training inputs. Use a fresh output directory after inspecting a failed preparation.
-
-## Additional documentation
-
-- [RETRAINING.md](RETRAINING.md): generic and mixed-393 preparation, training, calibration, export, and the historical experiment recipe.
-- [VALIDATION.md](VALIDATION.md): executed checks, exact test counts, compatibility evidence, and unverified limitations.
-
-Model SHA-256: `a060e07d99ffc072c41174412a6b182ef92a82cfcb2b493e5629bb3506c9449b`.
-
-Original prepared-manifest SHA-256: `0ea13d78b62ea7fc6dd64d38db3b3553e7ccb2ace8ba18ad5fd3afb4b0d5845f`.
